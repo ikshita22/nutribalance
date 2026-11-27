@@ -72,7 +72,7 @@
     var rp = N.recipePer100(r.ingredients, r.finalWeight);
     return {
       id: 'r_' + r.id, name: r.name, category: 'My Recipes', form: 'recipe', per100: rp.per100,
-      servingQty: rp.totalWeight / Math.max(1, r.servings), servingLabel: '1 serving', unit: 'g',
+      servingQty: rp.totalWeight / r.servings, servingLabel: '1 serving', unit: 'g',
       confidence: 'recipe', source: 'Calculated from your ingredients (approximate)', recipeId: r.id
     };
   }
@@ -214,10 +214,14 @@
     return h;
   };
 
+  function servingHtml(e) {
+    var sv = e.servingQty > 0 ? e.qty / e.servingQty : 0;
+    return '≈ ' + f(sv, 2) + ' × ' + esc(e.servingLabel || 'serving') + ' (' + f(e.servingQty, 0) + ' ' + e.unit + ')' +
+      (e.confidence === 'est' ? ' · estimate' : '');
+  }
   function itemHtml(meal, e) {
-    var n = N.entryNutrients(e), sv = e.servingQty > 0 ? e.qty / e.servingQty : 0;
-    return '<div class="item" data-item="' + e.id + '"><div><div class="iname">' + esc(e.name) + '</div><small>≈ ' + f(sv, 2) + ' × ' + esc(e.servingLabel || 'serving') + ' (' + f(e.servingQty, 0) + ' ' + e.unit + ')' +
-      (e.confidence === 'est' ? ' · estimate' : '') + '</small></div>' +
+    var n = N.entryNutrients(e);
+    return '<div class="item" data-item="' + e.id + '"><div><div class="iname">' + esc(e.name) + '</div><small>' + servingHtml(e) + '</small></div>' +
       '<div class="iq"><input type="number" min="0" step="any" value="' + f(e.qty, 2) + '" data-change="editqty" data-meal="' + meal + '" data-id="' + e.id + '" aria-label="Quantity in ' + e.unit + '"><span>' + e.unit + '</span>' +
       '<button class="icon-btn" data-action="remove" data-meal="' + meal + '" data-id="' + e.id + '" aria-label="Remove ' + esc(e.name) + '">✕</button></div>' +
       '<div class="inut">' + nutLine(n) + '</div></div>';
@@ -262,7 +266,7 @@
       '<p class="note">Recipes are calculated from ingredient quantities. Cooking changes (water loss, oil absorption) make results approximate — enter the final cooked weight for better per-100 g values.</p>';
     if (!S.recipes.length) return h + '<div class="card empty">No recipes yet. Build one from ingredients (for example besan cheela, roti or dal) and log it like any other food.</div>';
     return h + '<div class="foodgrid">' + S.recipes.map(function (r) {
-      var rp = N.recipePer100(r.ingredients, r.finalWeight), ps = {}, sv = Math.max(1, r.servings);
+      var rp = N.recipePer100(r.ingredients, r.finalWeight), ps = {}, sv = r.servings;
       KEYS.forEach(function (k) { ps[k] = rp.total[k] / sv; });
       return '<div class="card food"><h4>' + esc(r.name) + '</h4><div class="meta"><span class="pill recipe">Recipe</span><span>' + r.ingredients.length + ' ingredients · ' + f(sv, 2) + ' servings · ' + f(rp.totalWeight, 0) + ' g total</span></div>' +
         '<div class="macros"><div><b>' + f(ps.calories, 0) + '</b>kcal</div><div><b>' + f(ps.protein, 1) + '</b>protein</div><div><b>' + f(ps.carbs, 1) + '</b>carbs</div><div><b>' + f(ps.fat, 1) + '</b>fat</div><div><b>' + f(ps.fiber, 1) + '</b>fiber</div></div>' +
@@ -270,8 +274,7 @@
     }).join('') + '</div>';
   };
   function recipeBuilder() {
-    var d = S.draft, rp = N.recipePer100(d.ingredients, d.finalWeight), sv = Math.max(0.01, Number(d.servings) || 1), ps = {};
-    KEYS.forEach(function (k) { ps[k] = rp.total[k] / sv; });
+    var d = S.draft;
     var h = '<div class="card"><div class="row2"><div class="field"><label>Recipe name</label><input type="text" id="rName" value="' + esc(d.name) + '" data-input="draft-name" placeholder="e.g. Besan cheela"></div>' +
       '<div class="row2"><div class="field"><label>Servings made</label><input type="number" min="0.25" step="any" value="' + esc(d.servings) + '" data-change="draft-servings"></div>' +
       '<div class="field"><label>Cooked weight (g, optional)</label><input type="number" min="0" step="any" value="' + esc(d.finalWeight || '') + '" data-change="draft-weight" placeholder="auto"></div></div></div>' +
@@ -283,10 +286,15 @@
         '<div class="iq"><input type="number" min="0" step="any" value="' + f(i.qty, 2) + '" data-change="draft-ing-qty" data-idx="' + idx + '"> ' + i.unit + '</div><button class="icon-btn" data-action="recipe-rm-ing" data-idx="' + idx + '" aria-label="Remove ingredient">✕</button></div>';
     }).join('') : '<div class="empty">No ingredients yet.</div>';
     h += '<div style="margin-top:10px"><button class="btn ghost" data-action="recipe-add-ing">+ Add ingredient</button></div>' +
-      '<h2 style="font-size:16px;margin:16px 0 4px">Nutrition (approximate)</h2><div class="note">Per serving (' + f(sv, 2) + ' servings)</div>' + totBlock(ps) +
-      '<div class="note">Per 100 g of finished dish</div>' + totBlock(rp.per100) +
+      '<h2 style="font-size:16px;margin:16px 0 4px">Nutrition (approximate)</h2><div id="recipeNutrition">' + recipeNutritionHtml() + '</div>' +
       '<div class="dlg-foot"><button class="btn ghost" data-action="recipe-cancel">Cancel</button><button class="btn" data-action="recipe-save">Save recipe</button></div></div>';
     return h;
+  }
+  function recipeNutritionHtml() {
+    var d = S.draft, rp = N.recipePer100(d.ingredients, d.finalWeight), sv = Number(d.servings) > 0 ? Number(d.servings) : 1, ps = {};
+    KEYS.forEach(function (k) { ps[k] = rp.total[k] / sv; });
+    return '<div class="note">Per serving (' + f(sv, 2) + ' servings)</div>' + totBlock(ps) +
+      '<div class="note">Per 100 g of finished dish</div>' + totBlock(rp.per100);
   }
   function totBlock(n) {
     return '<div class="tot"><div><b>' + f(n.calories, 0) + '</b>kcal</div><div><b>' + f(n.protein, 1) + '</b>protein</div><div><b>' + f(n.carbs, 1) + '</b>carbs</div><div><b>' + f(n.fat, 1) + '</b>fat</div><div><b>' + f(n.fiber, 1) + '</b>fiber</div><div><b>' + f(n.sugar, 1) + '</b>sugar</div></div>';
@@ -459,26 +467,42 @@
   };
 
   var CHANGES = {
-    date: function (el) { if (/^\d{4}-\d{2}-\d{2}$/.test(el.value)) { S.date = el.value; render(); } },
+    date: function (el) {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(el.value)) {
+        S.date = el.value; $('.dlabel').textContent = dateLabel(S.date);
+        $('#view').innerHTML = VIEW[S.view]();
+      }
+    },
     editqty: function (el) {
       var r = findEntry(el.dataset.meal, el.dataset.id), v = Number(el.value);
       if (!r) return;
-      if (el.value === '' || !N.validQty(v)) { toast('Quantity must be greater than 0'); render(); return; }
-      r[0][r[1]].qty = v; save('nb_log', S.log); render();
+      var entry = r[0][r[1]];
+      if (el.value === '' || !N.validQty(v)) { toast('Quantity must be greater than 0'); el.value = f(entry.qty, 2); return; }
+      entry.qty = v; save('nb_log', S.log);
+      // Keep inputs and buttons mounted while blur commits an edit, so the pending click survives.
+      var item = el.closest('.item'), card = el.closest('.mealcard'), day = getDay(S.date);
+      $('.inut', item).innerHTML = nutLine(N.entryNutrients(entry));
+      $('small', item).innerHTML = servingHtml(entry);
+      $('.mealtot', card).innerHTML = nutLine(N.mealTotals(day[el.dataset.meal]));
+      $('[data-daytotal]').innerHTML = nutLine(N.dayTotals(day));
     },
     setting: function (el) {
       var v = Number(el.value);
-      if (el.value === '' || !(v > 0)) { toast('Target must be greater than 0'); render(); return; }
-      S.settings[el.dataset.key] = v; save('nb_settings', S.settings); toast('Target saved'); render();
+      if (el.value === '' || !isFinite(v) || !(v > 0)) { toast('Target must be greater than 0'); el.value = S.settings[el.dataset.key]; return; }
+      S.settings[el.dataset.key] = v; save('nb_settings', S.settings); toast('Target saved');
     },
     'food-cat': function (el) { S.fcat = el.value; $('#foodList').innerHTML = foodListHtml(); },
     'pick-cat': function (el) { S.modal.cat = el.value; $('#pickResults').innerHTML = pickResultsHtml(); },
     'meal-sel': function (el) { S.modal.meal = el.value; var b = $('#confirmAdd'); if (b) b.textContent = 'Add to ' + LABEL[el.value]; },
-    'draft-servings': function (el) { S.draft.servings = el.value; render(); },
-    'draft-weight': function (el) { S.draft.finalWeight = el.value; render(); },
+    'draft-servings': function (el) { S.draft.servings = el.value; $('#recipeNutrition').innerHTML = recipeNutritionHtml(); },
+    'draft-weight': function (el) { S.draft.finalWeight = el.value; $('#recipeNutrition').innerHTML = recipeNutritionHtml(); },
     'draft-ing-qty': function (el) {
-      var v = Number(el.value); if (el.value === '' || !(v > 0)) { toast('Quantity must be greater than 0'); render(); return; }
-      S.draft.ingredients[+el.dataset.idx].qty = v; render();
+      var ingredient = S.draft.ingredients[+el.dataset.idx], v = Number(el.value);
+      if (el.value === '' || !N.validQty(v)) { toast('Quantity must be greater than 0'); el.value = f(ingredient.qty, 2); return; }
+      ingredient.qty = v;
+      var n = N.scale(ingredient.per100, v);
+      $('.note', el.closest('.recipe-line')).textContent = f(n.calories, 0) + ' kcal · P ' + f(n.protein, 1) + ' · C ' + f(n.carbs, 1) + ' · F ' + f(n.fat, 1);
+      $('#recipeNutrition').innerHTML = recipeNutritionHtml();
     }
   };
   var INPUTS = {

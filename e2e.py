@@ -1,9 +1,14 @@
-"""End-to-end acceptance tests for NutriBalance (Playwright). Usage: python3 test/e2e.py [url]"""
-import re, sys
+"""Run npm start, then npm test (or python e2e.py [url]). Requires Playwright + Chromium.
+Set NB_SCREENSHOT_DIR to save screenshots outside the default test directory.
+"""
+import os, re, sys
+from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 URL = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8080/index.html"
 results, errors = [], []
+screenshots = Path(os.environ.get("NB_SCREENSHOT_DIR", "test"))
+screenshots.mkdir(parents=True, exist_ok=True)
 
 def check(name, cond, detail=""):
     results.append((name, bool(cond)))
@@ -119,7 +124,7 @@ with sync_playwright() as p:
     check("13c recipe saved", page.locator(".food", has_text="Besan cheela test").count() == 1)
     page.click('[data-action="recipe-log"]')
     page.click("#confirmAdd")
-    check("13d recipe loggable", page.locator('.item', has_text="Besan cheela test").count() == 1 or True)
+    check("13d recipe loggable", page.locator("#modal").inner_text() == "" and "Added Besan cheela test" in page.locator("#toast").inner_text())
     page.click('[data-view="log"]')
     check("13e recipe in log", page.locator('.item', has_text="Besan cheela test").count() == 1)
 
@@ -129,7 +134,7 @@ with sync_playwright() as p:
     check("invalid qty rejected", page.locator("#qErr").inner_text() != "")
     page.keyboard.press("Escape")
 
-    page.screenshot(path="test/desktop.png", full_page=True)
+    page.screenshot(path=str(screenshots / "desktop.png"), full_page=True)
 
     # mobile
     m = b.new_context(viewport={"width": 390, "height": 844}, is_mobile=True).new_page()
@@ -138,7 +143,64 @@ with sync_playwright() as p:
     nav_box = m.locator("#nav").bounding_box()
     overflow = m.evaluate("document.documentElement.scrollWidth > window.innerWidth + 1")
     check("14 mobile: bottom nav + no horizontal overflow", nav_box["y"] > 600 and not overflow, (nav_box, overflow))
-    m.screenshot(path="test/mobile.png")
+    m.screenshot(path=str(screenshots / "mobile.png"))
+
+    # Real blur/click interactions must not replace the pending click target.
+    for width in (1280, 390):
+        regression_ctx = b.new_context(viewport={"width": width, "height": 844}, is_mobile=width == 390, has_touch=width == 390)
+        r = regression_ctx.new_page()
+        r.on("pageerror", lambda e: errors.append(str(e)))
+        r.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+        r.goto(URL)
+        def nav(view):
+            r.click(f'#nav [data-view="{view}"]')
+        nav("settings")
+        for value, expected in (("75", 75), ("0", 75), ("", 75)):
+            r.fill("#set_protein", value)
+            nav("dashboard")
+            check(f"{width}px target {value!r}: first navigation click works", r.locator("#topbar h1").inner_text() == "Dashboard")
+            check(f"{width}px target {value!r}: valid value retained", r.evaluate("window.__NB.state.settings.protein") == expected)
+            nav("settings")
+        nav("log")
+        r.click('[data-meal-card="breakfast"] [data-action="add-open"]')
+        r.fill("#pickSearch", "egg")
+        r.locator(".res", has_text="Egg, whole, boiled").first.click()
+        r.fill("#qAmt", "100"); r.click("#confirmAdd")
+        for value in ("125", "0", ""):
+            r.locator(".item input").fill(value)
+            nav("dashboard")
+            check(f"{width}px quantity {value!r}: first navigation click works", r.locator("#topbar h1").inner_text() == "Dashboard")
+            check(f"{width}px quantity {value!r}: totals stay correct", abs(nums(r.locator('[data-stat="protein"] .stat-val').inner_text())[0] - 15.8) < .1)
+            nav("log")
+        r.locator(".item input").fill("150")
+        r.click('[data-meal-card="breakfast"] [data-action="add-open"]')
+        check(f"{width}px quantity blur opens picker on first click", r.locator("#pickSearch").count() == 1)
+        r.keyboard.press("Escape")
+        check(f"{width}px quantity edit updates item and meal totals", "3 ×" in r.locator(".item small").inner_text() and nums(r.locator('[data-meal-card="breakfast"] .mealtot').inner_text())[0] == 233)
+        r.fill("#dateInput", "2020-01-01")
+        r.click('[data-action="date-today"]')
+        check(f"{width}px date blur keeps Today button clickable", r.locator(".item").count() == 1)
+
+        nav("recipes"); r.click('[data-action="recipe-new"]'); r.fill("#rName", "Blur regression")
+        r.click('[data-action="recipe-add-ing"]'); r.fill("#pickSearch", "egg")
+        r.locator(".res", has_text="Egg, whole, boiled").first.click()
+        r.fill("#qAmt", "100"); r.click("#confirmAdd")
+        r.fill('[data-change="draft-servings"]', "2")
+        r.click('[data-change="draft-weight"]')
+        check(f"{width}px recipe edit keeps next field focused", r.locator('[data-change="draft-weight"]').evaluate("(el) => el === document.activeElement"))
+        r.fill('[data-change="draft-weight"]', "200")
+        r.click('[data-change="draft-ing-qty"]')
+        r.fill('[data-change="draft-ing-qty"]', "200")
+        r.click('[data-action="recipe-save"]')
+        check(f"{width}px ingredient blur saves recipe on first click", r.locator(".food", has_text="Blur regression").count() == 1)
+        r.click('[data-action="recipe-edit"]')
+        r.fill('[data-change="draft-servings"]', ".5")
+        r.click('[data-action="recipe-save"]')
+        r.click('[data-action="recipe-log"]')
+        check(f"{width}px fractional servings retain correct nutrition", r.locator("#qAmt").input_value() == "400" and nums(r.locator("#preview").inner_text())[0] == 620)
+        r.click("#confirmAdd"); nav("log")
+        check(f"{width}px recipe edits persist correct logged nutrition", "620" in r.locator(".item", has_text="Blur regression").locator(".inut").inner_text())
+        regression_ctx.close()
     b.close()
 
 check("15 no console/page errors", not errors, errors)

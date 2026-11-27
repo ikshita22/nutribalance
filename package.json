@@ -4,7 +4,7 @@
   "private": true,
   "description": "Offline personal nutrition dashboard (no dependencies)",
   "scripts": {
-    "start": "python3 -m http.server 8080",
-    "test": "python3 test/e2e.py"
+    "start": "python -m http.server 8080",
+    "test": "python e2e.py"
   }
 }
